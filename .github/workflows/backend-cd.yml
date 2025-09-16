@@ -1,20 +1,20 @@
+# .github/workflows/backend_cd.yml
 name: CD - Deploy Backend Services to AKS
 
 on:
   workflow_dispatch:
     inputs:
-      aks_cluster_name:
-        description: 'Name of the AKS Cluster to deploy to'
-        required: true
-        default: 'aks-week08'
-      aks_resource_group:
-        description: 'Resource Group of the AKS Cluster'
-        required: true
-        default: 'rg-week08'
       image_tag:
         description: 'Optional: CI image tag to deploy (else manifests tag, e.g. :latest)'
         required: false
         default: ''
+
+env:
+  # <<< change these if your repo uses different names >>>
+  NS: shop
+  ACR: ${{ secrets.ACR_LOGIN_SERVER }}
+  SVC_PROD: product-service-w08e1   # e.g., "product-service" if that's your Service name
+  SVC_ORDER: order-service-w08e1    # e.g., "order-service"
 
 jobs:
   deploy_backend:
@@ -25,87 +25,105 @@ jobs:
       PRODUCT_API_IP: ${{ steps.get_product_ip.outputs.external_ip }}
       ORDER_API_IP:   ${{ steps.get_order_ip.outputs.external_ip }}
 
-    env:
-      NAMESPACE: "shop"   # change if your YAML uses a different namespace
-      ACR: ${{ secrets.ACR_LOGIN_SERVER }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ No Service Principal — use kubeconfig secret instead
-      - name: Write kubeconfig
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.32.0
+
+      # Use gzip+base64 secret if present (smaller than 64KB); else plain base64
+      - name: Write kubeconfig (gzip+base64)
+        if: ${{ secrets.KUBE_CONFIG_GZ_B64 != '' }}
+        run: |
+          mkdir -p $HOME/.kube
+          echo "${{ secrets.KUBE_CONFIG_GZ_B64 }}" | base64 -d | gunzip > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
+
+      - name: Write kubeconfig (base64)
+        if: ${{ secrets.KUBE_CONFIG_GZ_B64 == '' && secrets.KUBE_CONFIG_B64 != '' }}
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 -d > $HOME/.kube/config
-      - name: kubectl version
-        run: kubectl version --client
+          chmod 600 $HOME/.kube/config
+          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
 
-      # (Optional) print inputs just for traceability
-      - name: Show inputs
+      - name: Fail if kubeconfig missing
+        if: ${{ secrets.KUBE_CONFIG_GZ_B64 == '' && secrets.KUBE_CONFIG_B64 == '' }}
         run: |
-          echo "AKS RG: ${{ github.event.inputs.aks_resource_group }}"
-          echo "AKS Name: ${{ github.event.inputs.aks_cluster_name }}"
-          echo "Image tag: ${{ github.event.inputs.image_tag }}"
+          echo "ERROR: Add KUBE_CONFIG_GZ_B64 or KUBE_CONFIG_B64 secret." >&2
+          exit 1
 
-      # Apply manifests (adjust paths if needed)
-      - name: Deploy Backend Infrastructure (Namespace, ConfigMaps, Secrets, Databases)
+      - name: Sanity check cluster access
         run: |
-          echo "Deploying backend infrastructure..."
-          cd k8s/
-          kubectl apply -f configmaps.yaml
-          kubectl apply -f secrets.yaml
-          kubectl apply -f product-db.yaml
-          kubectl apply -f order-db.yaml
+          kubectl config current-context
+          kubectl get nodes
 
+      # Ensure namespace exists
+      - name: Ensure namespace exists
+        run: |
+          kubectl get ns "$NS" || kubectl create ns "$NS"
+          kubectl get ns
+
+      # Apply infra (adjust paths if your files live elsewhere)
+      - name: Deploy Backend Infrastructure (ConfigMaps, Secrets, DBs)
+        run: |
+          kubectl apply -f k8s/configmaps.yaml   -n "$NS"
+          kubectl apply -f k8s/secrets.yaml     -n "$NS"
+          kubectl apply -f k8s/product-db.yaml  -n "$NS"
+          kubectl apply -f k8s/order-db.yaml    -n "$NS"
+
+      # Apply microservices
       - name: Deploy Backend Microservices (Product, Order)
         run: |
-          echo "Deploying backend microservices..."
-          cd k8s/
-          kubectl apply -f product-service.yaml
-          kubectl apply -f order-service.yaml
+          kubectl apply -f k8s/product-service.yaml -n "$NS"
+          kubectl apply -f k8s/order-service.yaml   -n "$NS"
 
-      # (Optional) pin images to your CI tag if provided (otherwise your YAML tag is used)
+      # Optionally pin images to the CI tag you just built (repositories use underscores per your CI)
       - name: Pin images to CI tag (optional)
         if: ${{ github.event.inputs.image_tag != '' }}
         env:
           TAG: ${{ github.event.inputs.image_tag }}
         run: |
-          kubectl set image deploy/product-service product-service=$ACR/product_service:$TAG -n ${{ env.NAMESPACE }}
-          kubectl set image deploy/order-service   order-service=$ACR/order_service:$TAG   -n ${{ env.NAMESPACE }}
+          kubectl set image deploy/product-service product-service=$ACR/product_service:$TAG -n "$NS"
+          kubectl set image deploy/order-service   order-service=$ACR/order_service:$TAG   -n "$NS"
 
-      - name: Show resources
-        run: kubectl get deploy,svc,pods -n ${{ env.NAMESPACE }}
+      - name: Wait for deployments to be ready
+        run: |
+          kubectl rollout status deploy/product-service -n "$NS" --timeout=180s || true
+          kubectl rollout status deploy/order-service   -n "$NS" --timeout=180s || true
+          kubectl get deploy,svc,pods -n "$NS"
 
-      # Robust wait: handle IP or hostname
-      - name: Wait for Backend LoadBalancer IPs
+      # Wait for external addresses (IP or hostname)
+      - name: Wait for Backend LoadBalancer addresses
         shell: bash
         run: |
-          svc_prod="product-service-w08e1"  # 👈 ensure these match your service names in YAML
-          svc_order="order-service-w08e1"
           for i in $(seq 1 60); do
-            echo "Attempt $i/60 to get IPs..."
-            PRODUCT_IP=$(kubectl get svc $svc_prod -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            ORDER_IP=$(kubectl get svc $svc_order -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            # fallback to hostname if IP is empty
-            if [ -z "$PRODUCT_IP" ]; then PRODUCT_IP=$(kubectl get svc $svc_prod -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'); fi
-            if [ -z "$ORDER_IP" ]; then ORDER_IP=$(kubectl get svc $svc_order -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'); fi
-            if [[ -n "$PRODUCT_IP" && -n "$ORDER_IP" ]]; then break; fi
+            echo "Attempt $i/60..."
+            PROD=$(kubectl get svc "$SVC_PROD" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            ORD=$(kubectl get svc "$SVC_ORDER" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            [[ -z "$PROD" ]] && PROD=$(kubectl get svc "$SVC_PROD" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            [[ -z "$ORD"  ]] && ORD=$(kubectl get svc "$SVC_ORDER" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            if [[ -n "$PROD" && -n "$ORD" ]]; then break; fi
             sleep 5
           done
-          if [[ -z "$PRODUCT_IP" || -z "$ORDER_IP" ]]; then
-            echo "Error: One or more LoadBalancer addresses not assigned after timeout."
+          if [[ -z "$PROD" || -z "$ORD" ]]; then
+            echo "Services in $NS:"; kubectl get svc -n "$NS"
+            echo "Error: LoadBalancer addresses not assigned in time."
             exit 1
           fi
-          echo "PRODUCT_IP=$PRODUCT_IP" >> $GITHUB_ENV
-          echo "ORDER_IP=$ORDER_IP" >> $GITHUB_ENV
-          echo "Product Service address: $PRODUCT_IP"
-          echo "Order Service address:   $ORDER_IP"
+          echo "PRODUCT_IP=$PROD" >> $GITHUB_ENV
+          echo "ORDER_IP=$ORD"   >> $GITHUB_ENV
+          echo "Product: $PROD"
+          echo "Order:   $ORD"
 
       - name: Capture Product Service IP for Workflow Output
         id: get_product_ip
         run: echo "external_ip=${{ env.PRODUCT_IP }}" >> $GITHUB_OUTPUT
-      
+
       - name: Capture Order Service IP for Workflow Output
         id: get_order_ip
         run: echo "external_ip=${{ env.ORDER_IP }}" >> $GITHUB_OUTPUT
