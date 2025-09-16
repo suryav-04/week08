@@ -1,93 +1,80 @@
-# week08/.github/workflows/frontend-cd.yml
-
 name: CD - Deploy Frontend to AKS
 
-# This workflow can be called by other workflows and takes inputs.
-# Or it can be run manually if you provide the IPs.
 on:
   workflow_dispatch:
     inputs:
-      product_api_ip:
-        description: 'External IP of Product Service'
-        required: true
-        default: 'http://<ip_address>:8000'
-      order_api_ip:
-        description: 'External IP of Order Service (e.g., http://Y.Y.Y.Y:8001)'
-        required: true
-        default: 'http://<ip_address>:8001'
-      aks_cluster_name:
-        description: 'Name of the AKS Cluster to deploy to'
-        required: true
-        default: '<aks_name>'
-      aks_resource_group:
-        description: 'Resource Group of the AKS Cluster'
-        required: true
-        default: '<<resource_group_name>'
+      image_tag:
+        description: 'Optional: CI image tag to deploy (else manifests tag, e.g. :latest)'
+        required: false
+        default: ''
 
-  workflow_call:
-    inputs:
-      product_api_ip:
-        required: true
-        type: string
-      order_api_ip:
-        required: true
-        type: string
-      aks_cluster_name:
-        required: true
-        type: string
-      aks_resource_group:
-        required: true
-        type: string
+env:
+  NS: shop
+  ACR: ${{ secrets.ACR_LOGIN_SERVER }}
+  SVC_FE: frontend-service-w08e1   # ⬅ change if your Service name differs
 
 jobs:
   deploy_frontend:
     runs-on: ubuntu-latest
-    environment: Production
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # Azure login using a Service Principal secret
-      - name: Azure Login
-        uses: azure/login@v1
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          version: v1.32.0
 
-      # Login to Azure Container Registry (ACR)
-      - name: Login to Azure Container Registry
-        run: az acr login --name ${{ secrets.AZURE_CONTAINER_REGISTRY }}
-
-      - name: Inject Backend IPs into Frontend main.js
+      # Write kubeconfig from either secret (gzip+base64 or plain base64)
+      - name: Write kubeconfig and set KUBECONFIG
+        env:
+          KCFG_GZ: ${{ secrets.KUBE_CONFIG_GZ_B64 }}
+          KCFG:    ${{ secrets.KUBE_CONFIG_B64 }}
+        shell: bash
         run: |
-          echo "Injecting IPs into frontend/static/js/main.js"
-          # Ensure frontend/main.js is directly in the path for sed
-          sed -i "s|_PRODUCT_API_URL_|${{ inputs.product_api_ip }}|g" frontend/main.js
-          sed -i "s|_ORDER_API_URL_|${{ inputs.order_api_ip }}|g" frontend/main.js
-          
-          # Display the modified file content for debugging
-          echo "--- Modified main.js content ---"
-          cat frontend/main.js
-          echo "---------------------------------"
+          mkdir -p "$HOME/.kube"
+          if [ -n "$KCFG_GZ" ]; then
+            echo "$KCFG_GZ" | base64 -d | gunzip > "$HOME/.kube/config"
+          elif [ -n "$KCFG" ]; then
+            echo "$KCFG" | base64 -d > "$HOME/.kube/config"
+          else
+            echo "ERROR: Add KUBE_CONFIG_GZ_B64 or KUBE_CONFIG_B64 secret." >&2; exit 1
+          fi
+          chmod 600 "$HOME/.kube/config"
+          echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
 
-      # Build and Push Docker image for Frontend
-      - name: Build and Push Frontend Image
+      - name: Ensure namespace exists
+        run: kubectl get ns "$NS" || kubectl create ns "$NS"
+
+      # Apply your frontend k8s files (adjust filenames if yours differ)
+      - name: Apply frontend manifests
         run: |
-          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:latest ./frontend/
-          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:latest
+          kubectl apply -f k8s/frontend-deployment.yaml -n "$NS" || kubectl apply -f k8s/frontend.yaml -n "$NS"
+          kubectl apply -f k8s/frontend-service.yaml    -n "$NS" || true
 
-      - name: Set Kubernetes context (get AKS credentials)
-        uses: azure/aks-set-context@v3
-        with:
-          resource-group: ${{ inputs.aks_resource_group }}
-          cluster-name: ${{ inputs.aks_cluster_name }}
-
-      - name: Deploy Frontend to AKS
+      # Optionally pin image to the CI tag
+      - name: Pin image tag (optional)
+        if: ${{ github.event.inputs.image_tag != '' }}
+        env:
+          TAG: ${{ github.event.inputs.image_tag }}
         run: |
-          echo "Deploying frontend with latest tag to AKS cluster: ${{ inputs.aks_cluster_name }}"
-          cd k8s/
-          # Ensure frontend-service.yaml is configured with your ACR
-          kubectl apply -f frontend.yaml
+          kubectl set image deploy/frontend frontend=$ACR/frontend:$TAG -n "$NS"
 
-      - name: Logout from Azure (AKS deployment)
-        run: az logout
+      - name: Wait for rollout & show resources
+        run: |
+          kubectl rollout status deploy/frontend -n "$NS" --timeout=180s || true
+          kubectl get deploy,svc,pods -n "$NS"
+
+      - name: Wait for Frontend LoadBalancer address
+        shell: bash
+        run: |
+          for i in $(seq 1 60); do
+            echo "Attempt $i/60..."
+            FE=$(kubectl get svc "$SVC_FE" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            [ -z "$FE" ] && FE=$(kubectl get svc "$SVC_FE" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            [ -n "$FE" ] && break
+            sleep 5
+          done
+          test -n "$FE"
+          echo "FRONTEND_ADDR=$FE" >> $GITHUB_ENV
+          echo "Frontend address: $FE"
