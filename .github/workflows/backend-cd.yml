@@ -1,3 +1,4 @@
+# .github/workflows/backend_cd.yml
 name: CD - Deploy Backend Services to AKS
 
 on:
@@ -11,47 +12,46 @@ on:
 env:
   NS: shop
   ACR: ${{ secrets.ACR_LOGIN_SERVER }}
-  SVC_PROD: product-service       # ← change to your exact Service name if different
-  SVC_ORDER: order-service        # e.g., product-service-w08e1 / order-service-w08e1
+  SVC_PROD: product-service-w08e1   # ← change to your actual Service name if different
+  SVC_ORDER: order-service-w08e1    # ← change to your actual Service name if different
 
 jobs:
   deploy_backend:
     runs-on: ubuntu-latest
+    # remove or keep environment if you have approvals configured
+    # environment: Production
 
     outputs:
       PRODUCT_API_IP: ${{ steps.get_product_ip.outputs.external_ip }}
       ORDER_API_IP:   ${{ steps.get_order_ip.outputs.external_ip }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
         with:
           version: v1.32.0
 
-      # Prefer gzip+base64 (smaller). Fall back to plain base64.
-      - name: Write kubeconfig (gzip+base64)
-        if: ${{ secrets.KUBE_CONFIG_GZ_B64 != '' }}
+      # ✅ Write kubeconfig from one of two secrets (no "if:" with secrets)
+      - name: Write kubeconfig and set KUBECONFIG
+        env:
+          KCFG_GZ: ${{ secrets.KUBE_CONFIG_GZ_B64 }}
+          KCFG:    ${{ secrets.KUBE_CONFIG_B64 }}
+        shell: bash
         run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG_GZ_B64 }}" | base64 -d | gunzip > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
-
-      - name: Write kubeconfig (base64)
-        if: ${{ secrets.KUBE_CONFIG_GZ_B64 == '' && secrets.KUBE_CONFIG_B64 != '' }}
-        run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 -d > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
-          echo "KUBECONFIG=$HOME/.kube/config" >> $GITHUB_ENV
-
-      - name: Fail if kubeconfig missing
-        if: ${{ secrets.KUBE_CONFIG_GZ_B64 == '' && secrets.KUBE_CONFIG_B64 == '' }}
-        run: |
-          echo "ERROR: Add KUBE_CONFIG_GZ_B64 or KUBE_CONFIG_B64 secret." >&2
-          exit 1
+          mkdir -p "$HOME/.kube"
+          if [ -n "$KCFG_GZ" ]; then
+            echo "$KCFG_GZ" | base64 -d | gunzip > "$HOME/.kube/config"
+          elif [ -n "$KCFG" ]; then
+            echo "$KCFG" | base64 -d > "$HOME/.kube/config"
+          else
+            echo "ERROR: Add KUBE_CONFIG_GZ_B64 or KUBE_CONFIG_B64 secret." >&2
+            exit 1
+          fi
+          chmod 600 "$HOME/.kube/config"
+          echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
 
       - name: Sanity check cluster access
         run: |
@@ -63,19 +63,19 @@ jobs:
           kubectl get ns "$NS" || kubectl create ns "$NS"
           kubectl get ns
 
-      - name: Deploy Backend Infrastructure
+      - name: Deploy Backend Infrastructure (ConfigMaps, Secrets, DBs)
         run: |
-          kubectl apply -f k8s/configmaps.yaml    -n "$NS"
+          kubectl apply -f k8s/configmaps.yaml   -n "$NS"
           kubectl apply -f k8s/secrets.yaml      -n "$NS"
           kubectl apply -f k8s/product-db.yaml   -n "$NS"
           kubectl apply -f k8s/order-db.yaml     -n "$NS"
 
-      - name: Deploy Backend Microservices
+      - name: Deploy Backend Microservices (Product, Order)
         run: |
           kubectl apply -f k8s/product-service.yaml -n "$NS"
           kubectl apply -f k8s/order-service.yaml   -n "$NS"
 
-      # Optional: pin to CI image tag if you pass it in the dispatch form
+      # Optional: pin to a specific CI image tag
       - name: Pin images to CI tag (optional)
         if: ${{ github.event.inputs.image_tag != '' }}
         env:
