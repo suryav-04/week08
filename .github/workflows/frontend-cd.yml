@@ -4,19 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: 'Optional: CI image tag to deploy (else manifests tag, e.g. :latest)'
+        description: 'Optional: CI image tag to deploy (else :latest from manifests)'
         required: false
         default: ''
 
 env:
   NS: shop
   ACR: ${{ secrets.ACR_LOGIN_SERVER }}
-  SVC_FE: frontend-service-w08e1   # ⬅ change if your Service name differs
 
 jobs:
   deploy_frontend:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +23,7 @@ jobs:
         with:
           version: v1.32.0
 
-      # Write kubeconfig from either secret (gzip+base64 or plain base64)
+      # Use kubeconfig secret (gzip+base64 or plain base64)
       - name: Write kubeconfig and set KUBECONFIG
         env:
           KCFG_GZ: ${{ secrets.KUBE_CONFIG_GZ_B64 }}
@@ -46,13 +44,13 @@ jobs:
       - name: Ensure namespace exists
         run: kubectl get ns "$NS" || kubectl create ns "$NS"
 
-      # Apply your frontend k8s files (adjust filenames if yours differ)
       - name: Apply frontend manifests
         run: |
+          # Adjust these paths to your repo if needed
           kubectl apply -f k8s/frontend-deployment.yaml -n "$NS" || kubectl apply -f k8s/frontend.yaml -n "$NS"
           kubectl apply -f k8s/frontend-service.yaml    -n "$NS" || true
 
-      # Optionally pin image to the CI tag
+      # Optionally pin to the CI tag you just built
       - name: Pin image tag (optional)
         if: ${{ github.event.inputs.image_tag != '' }}
         env:
@@ -65,13 +63,50 @@ jobs:
           kubectl rollout status deploy/frontend -n "$NS" --timeout=180s || true
           kubectl get deploy,svc,pods -n "$NS"
 
+      # 🔍 Discover the frontend Service name automatically
+      - name: Find frontend Service name
+        id: find_svc
+        shell: bash
+        run: |
+          # Try common labels; fall back to grep 'frontend' from the service list
+          NAME=$(kubectl get svc -n "$NS" -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+          if [ -z "$NAME" ]; then
+            NAME=$(kubectl get svc -n "$NS" -l 'app.kubernetes.io/name=frontend' -o jsonpath='{.items[0].metadata.name}')
+          fi
+          if [ -z "$NAME" ]; then
+            NAME=$(kubectl get svc -n "$NS" | awk '/frontend/ {print $1; exit}')
+          fi
+          if [ -z "$NAME" ]; then
+            echo "No Service matching 'frontend' found in namespace $NS" >&2
+            kubectl get svc -n "$NS"
+            exit 1
+          fi
+          echo "svc_name=$NAME" >> $GITHUB_OUTPUT
+          echo "Frontend Service detected: $NAME"
+
+      # 🛠 Ensure Service type is LoadBalancer (patch if needed)
+      - name: Ensure Service is LoadBalancer
+        shell: bash
+        run: |
+          SVC="${{ steps.find_svc.outputs.svc_name }}"
+          TYPE=$(kubectl get svc "$SVC" -n "$NS" -o jsonpath='{.spec.type}')
+          if [ "$TYPE" != "LoadBalancer" ]; then
+            echo "Patching Service $SVC to type LoadBalancer (was $TYPE)"
+            kubectl patch svc "$SVC" -n "$NS" -p '{"spec":{"type":"LoadBalancer"}}'
+          else
+            echo "Service $SVC already type LoadBalancer"
+          fi
+          kubectl get svc "$SVC" -n "$NS" -o wide
+
+      # ⏳ Wait for external IP/hostname
       - name: Wait for Frontend LoadBalancer address
         shell: bash
         run: |
+          SVC="${{ steps.find_svc.outputs.svc_name }}"
           for i in $(seq 1 60); do
             echo "Attempt $i/60..."
-            FE=$(kubectl get svc "$SVC_FE" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-            [ -z "$FE" ] && FE=$(kubectl get svc "$SVC_FE" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+            FE=$(kubectl get svc "$SVC" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+            [ -z "$FE" ] && FE=$(kubectl get svc "$SVC" -n "$NS" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
             [ -n "$FE" ] && break
             sleep 5
           done
