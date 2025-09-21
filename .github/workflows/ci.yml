@@ -1,0 +1,39 @@
+name: ci
+on:
+  pull_request:
+    branches: [dev, main]
+    paths: ['frontend/**','backend/**']
+  push:
+    branches: [dev]
+    paths: ['frontend/**','backend/**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { service: frontend, context: frontend, image: ecommerce-frontend }
+          - { service: backend,  context: backend,  image: ecommerce-backend  }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install & test
+        run: |
+          cd ${{ matrix.context }}
+          npm ci
+          npm test --if-present
+
+      - name: Reuse docker build & push
+        uses: ./.github/workflows/reusable-build-push.yml
+        with:
+          service: ${{ matrix.service }}
+          context: ${{ matrix.context }}
+          image:   ${{ matrix.image }}
