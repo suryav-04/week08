@@ -1,39 +1,31 @@
-name: ci
+name: CI
 on:
   pull_request:
-    branches: [dev, main]
-    paths: ['frontend/**','backend/**']
+    branches: [development, main]
   push:
-    branches: [dev]
-    paths: ['frontend/**','backend/**']
+    branches: [development, main]
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-
 jobs:
-  build-test-and-push:
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - { service: frontend, context: frontend, image: ecommerce-frontend }
-          - { service: backend,  context: backend,  image: ecommerce-backend  }
+        node: [18, 20]   # test on both LTS versions
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install & test
-        run: |
-          cd ${{ matrix.context }}
-          npm ci
-          npm test --if-present
-
-      - name: Reuse docker build & push
-        uses: ./.github/workflows/reusable-build-push.yml
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          service: ${{ matrix.service }}
-          context: ${{ matrix.context }}
-          image:   ${{ matrix.image }}
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests (if present)
+        run: npm test --if-present
