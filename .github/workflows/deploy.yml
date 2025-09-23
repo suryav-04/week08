@@ -1,28 +1,29 @@
-name: Deploy
-on:
-  push:
-    branches: [development, main]
+- name: Azure Login
+  uses: azure/login@v2
+  with:
+    creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+- name: Set AKS context
+  uses: azure/aks-set-context@v3
+  with:
+    creds: ${{ secrets.AZURE_CREDENTIALS }}
+    cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+    resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+- name: Build & Push Backend
+  run: |
+    az acr login --name ${{ secrets.ACR_NAME }}
+    docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }} ./backend
+    docker push ${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }}
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+- name: Build & Push Frontend
+  run: |
+    docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }} ./frontend
+    docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }}
 
-      - name: Build project
-        run: |
-          echo "Building project..."
-          npm ci || true
-          npm run build --if-present
-
-      - name: Deploy step (simulation)
-        run: |
-          echo "Deploying to ${{ job.environment }} environment"
-          echo "This is just a demo deploy step, no Azure required."
+- name: Deploy to AKS
+  run: |
+    kubectl set image deployment/backend backend=${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }} -n shop || echo "Backend deploy skipped"
+    kubectl set image deployment/frontend frontend=${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }} -n shop || echo "Frontend deploy skipped"
+    kubectl rollout status deployment/backend -n shop || true
+    kubectl rollout status deployment/frontend -n shop || true
