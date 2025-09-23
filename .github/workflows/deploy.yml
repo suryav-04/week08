@@ -1,0 +1,28 @@
+name: Deploy
+on:
+  push:
+    branches: [development, main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build project
+        run: |
+          echo "Building project..."
+          npm ci || true
+          npm run build --if-present
+
+      - name: Deploy step (simulation)
+        run: |
+          echo "Deploying to ${{ job.environment }} environment"
+          echo "This is just a demo deploy step, no Azure required."
