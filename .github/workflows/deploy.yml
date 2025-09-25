@@ -3,7 +3,7 @@ name: CD - Deploy to AKS
 on:
   push:
     branches:
-      - dev   # or 'main' if you want to deploy from main
+      - dev   # change to main if you want deployment from main branch
 
 jobs:
   deploy:
@@ -13,35 +13,42 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
+      # 🔑 Login to Azure using Service Principal
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Set up Helm (optional if using Helm)
-        uses: azure/setup-helm@v3
-
-      - name: Decode kubeconfig
-        run: echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
-
-      - name: Use kubeconfig
+      # 🔑 Get AKS credentials
+      - name: Get AKS credentials
         run: |
-          export KUBECONFIG=$(pwd)/kubeconfig.yaml
-          kubectl config view
+          az aks get-credentials \
+            --resource-group ${{ secrets.AZURE_RG }} \
+            --name ${{ secrets.AZURE_AKS }} \
+            --overwrite-existing
 
+      # 🔧 Deploy ConfigMaps and Secrets
       - name: Deploy ConfigMaps & Secrets
         run: |
           kubectl apply -f k8s/configmaps.yaml
           kubectl apply -f k8s/secrets.yaml
 
+      # 🔧 Deploy Order Service + DB
       - name: Deploy Order Service + DB
         run: |
           kubectl apply -f k8s/order-db.yaml
           kubectl apply -f k8s/order-service.yaml
 
+      # 🔧 Deploy Product Service + DB
       - name: Deploy Product Service + DB
         run: |
           kubectl apply -f k8s/product-db.yaml
           kubectl apply -f k8s/product-service.yaml
 
+      # 🔧 Deploy Frontend
       - name: Deploy Frontend
         run: |
           kubectl apply -f k8s/frontend.yaml
