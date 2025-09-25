@@ -1,0 +1,47 @@
+name: CD - Deploy to AKS
+
+on:
+  push:
+    branches:
+      - dev   # or 'main' if you want to deploy from main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Set up Helm (optional if using Helm)
+        uses: azure/setup-helm@v3
+
+      - name: Decode kubeconfig
+        run: echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
+
+      - name: Use kubeconfig
+        run: |
+          export KUBECONFIG=$(pwd)/kubeconfig.yaml
+          kubectl config view
+
+      - name: Deploy ConfigMaps & Secrets
+        run: |
+          kubectl apply -f k8s/configmaps.yaml
+          kubectl apply -f k8s/secrets.yaml
+
+      - name: Deploy Order Service + DB
+        run: |
+          kubectl apply -f k8s/order-db.yaml
+          kubectl apply -f k8s/order-service.yaml
+
+      - name: Deploy Product Service + DB
+        run: |
+          kubectl apply -f k8s/product-db.yaml
+          kubectl apply -f k8s/product-service.yaml
+
+      - name: Deploy Frontend
+        run: |
+          kubectl apply -f k8s/frontend.yaml

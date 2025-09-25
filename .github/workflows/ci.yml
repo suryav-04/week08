@@ -27,7 +27,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./backend/order_service
+
           file: ./backend/order_service/Dockerfile   # ✅ exact path
+
+          file: ./backend/order_service/Dockerfile
+           3b6e784 (Add CD pipeline to deploy to AKS)
           push: true
           tags: |
             ${{ secrets.AZURE_CONTAINER_REGISTRY }}/order-service:${{ github.sha }}
@@ -37,7 +41,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./backend/product_service
+
           file: ./backend/product_service/Dockerfile   # ✅ exact path
+
+          file: ./backend/product_service/Dockerfile
+           3b6e784 (Add CD pipeline to deploy to AKS)
           push: true
           tags: |
             ${{ secrets.AZURE_CONTAINER_REGISTRY }}/product-service:${{ github.sha }}
@@ -63,7 +71,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
+
           file: ./frontend/Dockerfile   # ✅ exact path
+
+          file: ./frontend/Dockerfile
+           3b6e784 (Add CD pipeline to deploy to AKS)
           push: true
           tags: |
             ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:${{ github.sha }}
