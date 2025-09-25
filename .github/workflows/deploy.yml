@@ -3,7 +3,7 @@ name: CD - Deploy to AKS
 on:
   push:
     branches:
-      - dev   # change to main if you want deployment from main branch
+      - dev   # change to main if you want deployment from main
 
 jobs:
   deploy:
@@ -13,14 +13,11 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 🔑 Login to Azure using Service Principal
+      # 🔑 Login with Service Principal JSON
       - name: Azure Login
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       # 🔑 Get AKS credentials
       - name: Get AKS credentials
