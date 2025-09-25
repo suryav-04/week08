@@ -1,57 +1,47 @@
-name: Deploy
+name: CD - Deploy to AKS
+
 on:
   push:
-    branches: [development, main]
-
-concurrency:
-  group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+    branches:
+      - dev   # or 'main' if you want to deploy from main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'production' || 'development' }}
 
     steps:
-      # Step 1: Checkout code
-      - name: Checkout code
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      # Step 2: Azure Login
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
 
-      # Step 3: Set AKS context
-      - name: Set AKS context
-        uses: azure/aks-set-context@v3
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
-          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+      - name: Set up Helm (optional if using Helm)
+        uses: azure/setup-helm@v3
 
-      # Step 4: Azure CLI sanity check (debug helper)
-      - name: Verify Azure Account
-        run: az account show
+      - name: Decode kubeconfig
+        run: echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig.yaml
 
-      # Step 5: Build & Push Backend
-      - name: Build & Push Backend
+      - name: Use kubeconfig
         run: |
-          az acr login --name ${{ secrets.ACR_NAME }}
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }} ./backend
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }}
+          export KUBECONFIG=$(pwd)/kubeconfig.yaml
+          kubectl config view
 
-      # Step 6: Build & Push Frontend
-      - name: Build & Push Frontend
+      - name: Deploy ConfigMaps & Secrets
         run: |
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }} ./frontend
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }}
+          kubectl apply -f k8s/configmaps.yaml
+          kubectl apply -f k8s/secrets.yaml
 
-      # Step 7: Deploy to AKS
-      - name: Deploy to AKS
+      - name: Deploy Order Service + DB
         run: |
-          kubectl set image deployment/backend backend=${{ secrets.ACR_NAME }}.azurecr.io/backend:${{ github.sha }} -n shop || echo "Backend deploy skipped"
-          kubectl set image deployment/frontend frontend=${{ secrets.ACR_NAME }}.azurecr.io/frontend:${{ github.sha }} -n shop || echo "Frontend deploy skipped"
-          kubectl rollout status deployment/backend -n shop || true
-          kubectl rollout status deployment/frontend -n shop || true
+          kubectl apply -f k8s/order-db.yaml
+          kubectl apply -f k8s/order-service.yaml
+
+      - name: Deploy Product Service + DB
+        run: |
+          kubectl apply -f k8s/product-db.yaml
+          kubectl apply -f k8s/product-service.yaml
+
+      - name: Deploy Frontend
+        run: |
+          kubectl apply -f k8s/frontend.yaml
