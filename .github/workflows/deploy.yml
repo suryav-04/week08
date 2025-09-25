@@ -3,49 +3,32 @@ name: CD - Deploy to AKS
 on:
   push:
     branches:
+<<<<<<< HEAD
       - dev   # change to main if you want deployment from main
+=======
+      - dev
+>>>>>>> da114fb (Test Azure login in CD pipeline)
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
+      # Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
+<<<<<<< HEAD
       # 🔑 Login with Service Principal JSON
+=======
+      # Azure Login
+>>>>>>> da114fb (Test Azure login in CD pipeline)
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # 🔑 Get AKS credentials
-      - name: Get AKS credentials
+      # Debug subscription info
+      - name: Show Azure Subscription
         run: |
-          az aks get-credentials \
-            --resource-group ${{ secrets.AZURE_RG }} \
-            --name ${{ secrets.AZURE_AKS }} \
-            --overwrite-existing
-
-      # 🔧 Deploy ConfigMaps and Secrets
-      - name: Deploy ConfigMaps & Secrets
-        run: |
-          kubectl apply -f k8s/configmaps.yaml
-          kubectl apply -f k8s/secrets.yaml
-
-      # 🔧 Deploy Order Service + DB
-      - name: Deploy Order Service + DB
-        run: |
-          kubectl apply -f k8s/order-db.yaml
-          kubectl apply -f k8s/order-service.yaml
-
-      # 🔧 Deploy Product Service + DB
-      - name: Deploy Product Service + DB
-        run: |
-          kubectl apply -f k8s/product-db.yaml
-          kubectl apply -f k8s/product-service.yaml
-
-      # 🔧 Deploy Frontend
-      - name: Deploy Frontend
-        run: |
-          kubectl apply -f k8s/frontend.yaml
+          az account show
+          az account list -o table
