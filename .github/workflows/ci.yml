@@ -23,14 +23,25 @@ jobs:
           username: ${{ secrets.AZURE_CLIENT_ID }}
           password: ${{ secrets.AZURE_CLIENT_SECRET }}
 
-      - name: Build & Push Backend
+      - name: Build & Push Order Service
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: ./backend/order_service
+          file: ./backend/order_service/Dockerfile   # ✅ exact path
           push: true
           tags: |
-            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/backend:${{ github.sha }}
-            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/backend:latest
+            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/order-service:${{ github.sha }}
+            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/order-service:latest
+
+      - name: Build & Push Product Service
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend/product_service
+          file: ./backend/product_service/Dockerfile   # ✅ exact path
+          push: true
+          tags: |
+            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/product-service:${{ github.sha }}
+            ${{ secrets.AZURE_CONTAINER_REGISTRY }}/product-service:latest
 
   build-frontend:
     runs-on: ubuntu-latest
@@ -52,6 +63,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
+          file: ./frontend/Dockerfile   # ✅ exact path
           push: true
           tags: |
             ${{ secrets.AZURE_CONTAINER_REGISTRY }}/frontend:${{ github.sha }}
