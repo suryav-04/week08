@@ -1,34 +1,54 @@
-name: CD - Deploy to AKS
+name: CD to AKS
 
 on:
   push:
     branches:
-<<<<<<< HEAD
-      - dev   # change to main if you want deployment from main
-=======
       - dev
->>>>>>> da114fb (Test Azure login in CD pipeline)
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       # Checkout repo
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-<<<<<<< HEAD
-      # 🔑 Login with Service Principal JSON
-=======
-      # Azure Login
->>>>>>> da114fb (Test Azure login in CD pipeline)
+      # Login to Azure
       - name: Azure Login
-        uses: azure/login@v2
+        uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Debug subscription info
-      - name: Show Azure Subscription
+      # Get AKS credentials
+      - name: Set AKS context
+        uses: azure/aks-set-context@v3
+        with:
+          resource-group: ${{ secrets.AZURE_RG }}
+          cluster-name: ${{ secrets.AZURE_AKS }}
+
+      # Login to ACR
+      - name: Azure Container Registry Login
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io
+          username: ${{ secrets.AZURE_CREDENTIALS.clientId }}
+          password: ${{ secrets.AZURE_CREDENTIALS.clientSecret }}
+
+      # Build & Push Order Service
+      - name: Build & Push Order Service
         run: |
-          az account show
-          az account list -o table
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/order-service:latest ./backend/order_service
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/order-service:latest
+
+      # Build & Push Product Service
+      - name: Build & Push Product Service
+        run: |
+          docker build -t ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/product-service:latest ./backend/product_service
+          docker push ${{ secrets.AZURE_CONTAINER_REGISTRY }}.azurecr.io/product-service:latest
+
+      # Deploy to AKS (apply manifests)
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f backend/order_service/deployment.yaml
+          kubectl apply -f backend/product_service/deployment.yaml
