@@ -17,11 +17,11 @@ spec:
         app: product-service
     spec:
       containers:
-      - name: product-service-container
-        image: durgeshsamariya.azurecr.io/product_service:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8000
+      - name: product-service
+  image: sit7229cacr123.azurecr.io/product-service:latest
+  ports:
+  - containerPort: 8000
+
         env:
         # Database connection details
         - name: POSTGRES_HOST

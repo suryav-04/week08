@@ -17,11 +17,11 @@ spec:
         app: order-service
     spec:
       containers:
-      - name: order-service-container
-        image: durgeshsamariya.azurecr.io/order_service:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 8000
+       - name: order-service
+  image: sit7229cacr123.azurecr.io/order-service:latest
+  ports:
+  - containerPort: 8001
+
         env:
         - name: POSTGRES_HOST
           value: order-db-service-w08e1
