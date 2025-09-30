@@ -7,24 +7,22 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Azure Login using SP credentials
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      # Setup kubeconfig from secret
+      - name: Set up KUBECONFIG
+        run: |
+          echo "${{ secrets.KUBE_CONFIG_B64 }}" | base64 -d > kubeconfig.yaml
+          export KUBECONFIG=$PWD/kubeconfig.yaml
+          kubectl config view --minify
 
-      # 2. Set AKS context (no creds here)
-      - name: Set AKS context
-        uses: azure/aks-set-context@v3
-        with:
-          resource-group: SIT722-Week08-RG
-          cluster-name: sit722week08aks
-          subscription: 4074bd4c-de4d-4ebb-b0f7-af3a51351cb0
+      # Verify connection to AKS
+      - name: Verify cluster
+        run: kubectl get nodes
 
-      # 3. Deploy manifests to AKS
+      # Deploy manifests to AKS
       - name: Deploy to AKS
         run: |
           kubectl apply -f k8s/
