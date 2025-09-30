@@ -1,3 +1,4 @@
+
 name: CD - Deploy to AKS
 
 on:
@@ -5,11 +6,14 @@ on:
     branches:
       - dev
 
+  
+       7ec1e5bc5c5291990492b755049ef181de74ec8c
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+
       # Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -48,4 +52,40 @@ jobs:
       # Deploy Frontend
       - name: Deploy Frontend
         run: |
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Decode kubeconfig
+        run: echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $GITHUB_WORKSPACE/kubeconfig.yaml
+
+      - name: Set kubeconfig
+        run: |
+          export KUBECONFIG=$GITHUB_WORKSPACE/kubeconfig.yaml
+          kubectl config current-context
+
+      - name: Deploy ConfigMaps & Secrets
+        run: |
+          export KUBECONFIG=$GITHUB_WORKSPACE/kubeconfig.yaml
+          kubectl apply -f k8s/configmaps.yaml
+          kubectl apply -f k8s/secrets.yaml
+
+      - name: Deploy Order Service + DB
+        run: |
+          export KUBECONFIG=$GITHUB_WORKSPACE/kubeconfig.yaml
+          kubectl apply -f k8s/order-db.yaml
+          kubectl apply -f k8s/order-service.yaml
+
+      - name: Deploy Product Service + DB
+        run: |
+          export KUBECONFIG=$GITHUB_WORKSPACE/kubeconfig.yaml
+          kubectl apply -f k8s/product-db.yaml
+          kubectl apply -f k8s/product-service.yaml
+
+      - name: Deploy Frontend
+        run: |
+          export KUBECONFIG=$GITHUB_WORKSPACE/kubeconfig.yaml
+          7ec1e5bc5c5291990492b755049ef181de74ec8c
           kubectl apply -f k8s/frontend.yaml

@@ -1,0 +1,26 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Set AKS context using kubeconfig secret
+      - name: Set AKS context
+        uses: azure/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG_B64 }}
+
+      # Deploy manifests to your AKS cluster
+      - name: Deploy to AKS
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deploy/frontend -n shop --timeout=180s || true
+          kubectl rollout status deploy/backend -n shop --timeout=180s || true
